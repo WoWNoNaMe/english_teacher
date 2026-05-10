@@ -1,4 +1,3 @@
-
 import os
 import json
 import random
@@ -17,13 +16,12 @@ GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 CHAT_ID = int(os.environ["CHAT_ID"])  # A te Telegram chat ID-d
 DATA_FILE = "progress.json"
  
-
-# Napközben mikor jöhetnek kérdések (óra, helyi idő szerint UTC+2)
-QUESTION_WINDOW_START = time(7, 55)   # 09:00
-QUESTION_WINDOW_END = time(21, 0)    # 18:00 (hogy 20:00 előtt biztosan meglegyen)
-DAILY_SEND_HOUR = 5   # 08:00 Budapest = 06:00 UTC
-DAILY_SEND_MINUTE = 55
-
+# Napközben mikor jöhetnek kérdések (UTC időben!)
+QUESTION_WINDOW_START = time(7, 40)   # 09:40 Budapest = 07:40 UTC
+QUESTION_WINDOW_END = time(18, 0)     # 20:00 Budapest = 18:00 UTC
+DAILY_SEND_HOUR = 5    # 07:40 Budapest = 05:40 UTC
+DAILY_SEND_MINUTE = 40
+ 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
  
@@ -281,11 +279,13 @@ async def main():
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
  
-    # Scheduler indítása háttérben
-    asyncio.create_task(scheduler(app.bot))
- 
     logger.info("Bot indul...")
-    await app.run_polling(drop_pending_updates=True)
+    async with app:
+        await app.start()
+        await app.updater.start_polling(drop_pending_updates=True)
+        await scheduler(app.bot)  # végtelen ciklus, ez tartja életben a botot
+        await app.updater.stop()
+        await app.stop()
  
  
 if __name__ == "__main__":
