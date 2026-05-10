@@ -3,11 +3,11 @@ import json
 import random
 import asyncio
 import logging
+import requests
 from datetime import datetime, time
 from pathlib import Path
 
-from google import genai
-from telegram import Update, Bot
+from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
 # --- Config ---
@@ -16,15 +16,23 @@ GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 CHAT_ID = int(os.environ["CHAT_ID"])
 DATA_FILE = "progress.json"
 
-QUESTION_WINDOW_START = time(7, 40)
-QUESTION_WINDOW_END = time(18, 0)
-DAILY_SEND_HOUR = 5
+DAILY_SEND_HOUR = 5      # 07:40 Budapest = 05:40 UTC
 DAILY_SEND_MINUTE = 40
+QUESTION_START_HOUR = 7  # 09:00 Budapest = 07:00 UTC
+QUESTION_END_HOUR = 18   # 20:00 Budapest = 18:00 UTC
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-client = genai.Client(api_key=GEMINI_API_KEY)
+
+# --- Gemini API (direkt requests, nem SDK) ---
+
+def gemini(prompt: str) -> str:
+    url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    body = {"contents": [{"parts": [{"text": prompt}]}]}
+    r = requests.post(url, json=body, timeout=30)
+    r.raise_for_status()
+    return r.json()["candidates"][0]["content"]["parts"][0]["text"]
 
 
 # --- Adatkezelés ---
@@ -34,10 +42,10 @@ def load_data() -> dict:
         with open(DATA_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
     return {
-        "words": [],          # Összes tanult szó/kifejezés
+        "words": [],
+        "today_words": [],
         "learned_today": False,
-        "today_words": [],    # Mai 5 szó
-        "pending_reviews": [], # Szavak amiket még kérdezni kell ma
+        "current_question": None,
         "last_date": None,
     }
 
@@ -46,120 +54,90 @@ def save_data(data: dict):
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
-# --- Gemini API hívások ---
+# --- AI funkciók ---
 
-def generate_daily_words(previous_words: list[str]) -> str:
-    prev_text = ", ".join(previous_words[-30:]) if previous_words else "nincs még"
-    prompt = f"""Te egy szakmai angol oktató vagy. A tanuló Junior Model Validator pozícióban dolgozik – pénzügyi modellek validálásával, kvantitatív kockázatelemzéssel, stresszteszteléssel, model governance-szel foglalkozik.
+def get_daily_words(previous: list) -> str:
+    prev_text = ", ".join(previous[-30:]) if previous else "nincs még"
+    return gemini(f"""Te egy szakmai angol oktató vagy. A tanuló Junior Model Validator – pénzügyi modellek validálása, kockázatelemzés, stressztesztelés, model governance.
 
-Generálj pontosan 5 szakmai angol szót vagy kifejezést, amiket még NEM tanult (előző szavak: {prev_text}).
+Generálj pontosan 5 szakmai angol szót/kifejezést, amiket még NEM tanult (előzők: {prev_text}).
 
-Formátum (pontosan így, semmi más):
-1. **szó/kifejezés** – magyar jelentés – Példamondat angolul.
-2. **szó/kifejezés** – magyar jelentés – Példamondat angolul.
-3. **szó/kifejezés** – magyar jelentés – Példamondat angolul.
-4. **szó/kifejezés** – magyar jelentés – Példamondat angolul.
-5. **szó/kifejezés** – magyar jelentés – Példamondat angolul.
+Formátum (pontosan, semmi más):
+1. **szó** – magyar jelentés – Példamondat angolul.
+2. **szó** – magyar jelentés – Példamondat angolul.
+3. **szó** – magyar jelentés – Példamondat angolul.
+4. **szó** – magyar jelentés – Példamondat angolul.
+5. **szó** – magyar jelentés – Példamondat angolul.""")
 
-Csak a listát add vissza, semmi bevezető szöveg."""
-    response = client.models.generate_content(model="gemini-1.5-flash", contents=prompt)
-    return response.text
+def get_question(word: str) -> str:
+    return gemini(f"""Egy Junior Model Validator angolt tanul. Az egyik szava:
+{word}
 
+Írj EGY rövid kérdést magyarul ami teszteli hogy emlékszik-e rá. Csak a kérdést írd.""")
 
-def generate_review_question(word_entry: str, all_today_words: list[str]) -> str:
-    prompt = f"""Egy Junior Model Validator angolt tanul. Ez az egyik szava:
-{word_entry}
+def check_answer(question: str, word: str, answer: str) -> str:
+    return gemini(f"""Kérdés: {question}
+Helyes szó: {word}
+Tanuló válasza: {answer}
 
-Generálj EGY rövid kérdést magyarul, ami teszteli hogy emlékszik-e erre a szóra/kifejezésre. 
-Például kérdezheted a jelentést, vagy hogy töltse ki a hiányzó szót egy mondatban angolul.
-Csak a kérdést írd, semmi más."""
-    response = client.models.generate_content(model="gemini-1.5-flash", contents=prompt)
-    return response.text
+Értékeld röviden magyarul (max 2 mondat): helyes volt-e, és ha nem, mi lett volna a helyes válasz.""")
 
 
-def check_answer(question: str, word_entry: str, user_answer: str) -> str:
-    prompt = f"""Kérdés volt: {question}
-A helyes szó/kifejezés: {word_entry}
-A tanuló válasza: {user_answer}
+# --- Napi szavak küldése ---
 
-Értékeld röviden magyarul: helyes volt-e, és ha nem, mi lett volna a helyes válasz. Max 2 mondat."""
-    response = client.models.generate_content(model="gemini-1.5-flash", contents=prompt)
-    return response.text
-
-
-# --- Bot logika ---
-
-async def send_daily_words(bot: Bot, data: dict):
-    """Napi 5 új szó küldése."""
+async def send_daily_words(bot, data: dict):
     today = datetime.now().strftime("%Y-%m-%d")
-    
-    # Ha már küldtük ma, ne küldjük újra
     if data.get("last_date") == today:
         return
 
-    logger.info("Napi szavak küldése...")
-    
-    previous_words_flat = [w["term"] for w in data["words"]]
-    words_text = generate_daily_words(previous_words_flat)
-    
-    # Parsoljuk a szavakat (egyszerű split soronként)
-    lines = [l.strip() for l in words_text.strip().split("\n") if l.strip()]
+    logger.info("Napi szavak generálása...")
+    previous = [w["term"] for w in data["words"]]
+    words_text = get_daily_words(previous)
+
     today_words = []
-    for line in lines:
-        # Kinyerjük a szót a **...** közül
+    for line in words_text.strip().split("\n"):
         if "**" in line:
             term = line.split("**")[1]
-            today_words.append({"term": term, "full": line, "reviewed": 0})
-
-    # Előző napok szavaiból is hozzáadunk ismétlőket
-    review_pool = []
-    for w in data["words"]:
-        review_pool.append(w)
+            today_words.append({"term": term, "full": line})
 
     data["today_words"] = today_words
     data["words"].extend(today_words)
     data["learned_today"] = False
     data["last_date"] = today
-    data["pending_reviews"] = []
     data["current_question"] = None
     save_data(data)
 
-    # Üzenet összerakása
-    day_num = len(set(w.get("date", today) for w in data["words"]))
-    review_count = len(review_pool)
-    
-    msg = f"☀️ *{today} – Napi szakmai angol*\n\n"
-    msg += f"*Mai 5 új szó:*\n\n{words_text}\n\n"
-    if review_count > 0:
-        msg += f"📚 _{review_count} korábbi szó is vár ismétlésre a nap folyamán._\n\n"
+    total = len(data["words"])
+    msg = f"☀️ *{today} – Napi szakmai angol*\n\n{words_text}\n\n"
+    if total > len(today_words):
+        msg += f"📚 _{total - len(today_words)} korábbi szó is vár ismétlésre._\n\n"
     msg += "Ha megtanultad, írd: *megtanultam*"
 
     await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
     logger.info("Napi szavak elküldve.")
 
 
-async def send_review_question(bot: Bot, data: dict):
-    """Küld egy ismétlő kérdést a nap folyamán."""
-    if not data.get("learned_today"):
-        return  # Még nem mondta h megtanulta
+# --- Kérdés küldése ---
 
-    now = datetime.now().time()
-    if not (QUESTION_WINDOW_START <= now <= QUESTION_WINDOW_END):
+async def send_question(bot, data: dict, force: bool = False):
+    if not data.get("learned_today"):
         return
 
-    # Pool: mai szavak + korábbi szavak
+    now_utc = datetime.utcnow()
+    if not force and not (QUESTION_START_HOUR <= now_utc.hour < QUESTION_END_HOUR):
+        return
+
+    if data.get("current_question"):
+        return
+
     all_words = data.get("words", [])
     if not all_words:
         return
 
-    # Véletlenszerűen választunk egyet
-    word = random.choice(all_words[-20:])  # Az utóbbi 20 szóból
-    question = generate_review_question(word["full"], [w["full"] for w in data["today_words"]])
-    
-    data["current_question"] = {
-        "question": question,
-        "word": word
-    }
+    word = random.choice(all_words[-20:])
+    question = get_question(word["full"])
+
+    data["current_question"] = {"question": question, "word": word}
     save_data(data)
 
     await bot.send_message(
@@ -175,37 +153,30 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip().lower()
     data = load_data()
 
-    # "megtanultam" feldolgozása
     if "megtanultam" in text:
         if data.get("learned_today"):
-            await update.message.reply_text("✅ Már jelezted korábban! A nap folyamán jönnek a kérdések.")
+            await update.message.reply_text("✅ Már jelezted! Kérdések jönnek a nap folyamán.")
             return
-        
         data["learned_today"] = True
         save_data(data)
-        
-        today_count = len(data.get("today_words", []))
-        total_count = len(data.get("words", []))
+        total = len(data.get("words", []))
         await update.message.reply_text(
-            f"💪 Klassz! A mai {today_count} szót rögzítettem.\n"
-            f"Összesen már {total_count} szót ismersz.\n\n"
-            f"A nap folyamán 20:00-ig kérdezek néhányat – de nem most rögtön. 😏"
+            f"💪 Klassz! Összesen már *{total}* szót ismersz.\n\n"
+            f"A nap folyamán kérdezek – de nem most rögtön. 😏",
+            parse_mode="Markdown"
         )
         return
 
-    # Ha van függőben lévő kérdés → ez a válasz rá
     if data.get("current_question"):
-        q_data = data["current_question"]
-        feedback = check_answer(q_data["question"], q_data["word"]["full"], text)
+        q = data["current_question"]
+        feedback = check_answer(q["question"], q["word"]["full"], text)
         data["current_question"] = None
         save_data(data)
         await update.message.reply_text(f"📝 {feedback}")
         return
 
-    # Egyéb üzenet
     await update.message.reply_text(
-        "Szia! Ha megtanultad a mai szavakat, írd: *megtanultam*\n"
-        "A nap folyamán kérdezek tőled néhányat. 📖",
+        "Ha megtanultad a mai szavakat, írd: *megtanultam* 📖",
         parse_mode="Markdown"
     )
 
@@ -213,95 +184,73 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Szia! Ez a Model Validator angol tanuló botod.\n\n"
-        "Minden reggel 8:00-kor kapsz 5 új szakmai szót.\n"
+        "Minden reggel 7:40-kor kapsz 5 új szakmai szót.\n"
         "Ha megtanultad, írd: *megtanultam*\n"
-        "Utána a nap folyamán kérdezek tőled néhányat.\n\n"
-        "Holnap reggelig várok! 💪",
+        "Utána a nap folyamán kérdezek tőled néhányat. 💪",
         parse_mode="Markdown"
     )
-
 
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = load_data()
     total = len(data.get("words", []))
     learned = "✅ Igen" if data.get("learned_today") else "❌ Még nem"
-    today_words = data.get("today_words", [])
-    
-    msg = f"📊 *Státusz*\n\n"
-    msg += f"Összes tanult szó: *{total}*\n"
-    msg += f"Mai szavak megtanulva: {learned}\n"
-    if today_words:
-        msg += f"\n*Mai szavak:*\n"
-        for w in today_words:
-            msg += f"• {w['term']}\n"
-    
+    msg = f"📊 *Státusz*\n\nÖsszes tanult szó: *{total}*\nMai szavak megtanulva: {learned}"
     await update.message.reply_text(msg, parse_mode="Markdown")
 
-
 async def cmd_force(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Teszteléshez: azonnal küldi a napi szavakat."""
     data = load_data()
-    data["last_date"] = None  # Reset hogy küldje
+    data["last_date"] = None
     save_data(data)
-    await update.message.reply_text("⏳ Napi szavak generálása...")
+    await update.message.reply_text("⏳ Generálás...")
     await send_daily_words(context.bot, data)
 
-
-async def cmd_force_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Teszteléshez: azonnal küld egy kérdést."""
+async def cmd_forcequestion(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = load_data()
     if not data.get("today_words"):
-        await update.message.reply_text("Még nincsenek mai szavak! Előbb /force")
+        await update.message.reply_text("Előbb küldj /force-t!")
         return
-    data["learned_today"] = True
-    save_data(data)
-    await send_review_question(context.bot, data)
-    if not data.get("current_question"):
-        await update.message.reply_text("Próbáld újra, vagy írj előbb /force-t.")
+    await send_question(context.bot, data, force=True)
+    if not load_data().get("current_question"):
+        await update.message.reply_text("Hiba, próbáld újra.")
 
 
 # --- Scheduler ---
 
-async def scheduler(bot: Bot):
-    """Háttérben futó ütemező."""
+async def scheduler(bot):
     while True:
         now = datetime.utcnow()
         data = load_data()
 
-        # Napi szavak küldése 08:00 Budapest = 06:00 UTC
         if now.hour == DAILY_SEND_HOUR and now.minute == DAILY_SEND_MINUTE:
             await send_daily_words(bot, data)
-            await asyncio.sleep(60)  # Ne küldje kétszer
+            await asyncio.sleep(61)
             continue
 
-        # Napközbeni kérdések: ha megtanulta, random 20-60 percenként kérdez
-        if data.get("learned_today"):
-            local_hour = (now.hour + 2) % 24  # UTC+2
-            if 9 <= local_hour < 18:
-                # 30% eséllyel kérdez minden 10 percben → kb. 3-4 kérdés naponta
-                if random.random() < 0.30 and not data.get("current_question"):
-                    await send_review_question(bot, data)
+        if data.get("learned_today") and not data.get("current_question"):
+            if QUESTION_START_HOUR <= now.hour < QUESTION_END_HOUR:
+                if random.random() < 0.25:
+                    await send_question(bot, data)
 
-        await asyncio.sleep(600)  # 10 percenként ellenőriz
+        await asyncio.sleep(600)
 
+
+# --- Main ---
 
 async def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
-
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("force", cmd_force))
-    app.add_handler(CommandHandler("forcequestion", cmd_force_question))
+    app.add_handler(CommandHandler("forcequestion", cmd_forcequestion))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     logger.info("Bot indul...")
     async with app:
         await app.start()
         await app.updater.start_polling(drop_pending_updates=True)
-        await scheduler(app.bot)  # végtelen ciklus, ez tartja életben a botot
+        await scheduler(app.bot)
         await app.updater.stop()
         await app.stop()
-
 
 if __name__ == "__main__":
     asyncio.run(main())
