@@ -62,7 +62,7 @@ Formátum (pontosan így, semmi más):
 5. **szó/kifejezés** – magyar jelentés – Példamondat angolul.
 
 Csak a listát add vissza, semmi bevezető szöveg."""
-    response = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
+    response = client.models.generate_content(model="gemini-1.5-flash", contents=prompt)
     return response.text
 
 
@@ -73,7 +73,7 @@ def generate_review_question(word_entry: str, all_today_words: list[str]) -> str
 Generálj EGY rövid kérdést magyarul, ami teszteli hogy emlékszik-e erre a szóra/kifejezésre. 
 Például kérdezheted a jelentést, vagy hogy töltse ki a hiányzó szót egy mondatban angolul.
 Csak a kérdést írd, semmi más."""
-    response = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
+    response = client.models.generate_content(model="gemini-1.5-flash", contents=prompt)
     return response.text
 
 
@@ -83,7 +83,7 @@ A helyes szó/kifejezés: {word_entry}
 A tanuló válasza: {user_answer}
 
 Értékeld röviden magyarul: helyes volt-e, és ha nem, mi lett volna a helyes válasz. Max 2 mondat."""
-    response = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
+    response = client.models.generate_content(model="gemini-1.5-flash", contents=prompt)
     return response.text
 
 
