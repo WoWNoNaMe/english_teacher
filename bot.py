@@ -16,10 +16,10 @@ GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 CHAT_ID = int(os.environ["CHAT_ID"])
 DATA_FILE = "progress.json"
 
-QUESTION_WINDOW_START = time(7, 50)
+QUESTION_WINDOW_START = time(7, 40)
 QUESTION_WINDOW_END = time(18, 0)
 DAILY_SEND_HOUR = 5
-DAILY_SEND_MINUTE = 50
+DAILY_SEND_MINUTE = 40
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -213,7 +213,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Szia! Ez a Model Validator angol tanuló botod.\n\n"
-        "Minden reggel 7:50-kor kapsz 5 új szakmai szót.\n"
+        "Minden reggel 8:00-kor kapsz 5 új szakmai szót.\n"
         "Ha megtanultad, írd: *megtanultam*\n"
         "Utána a nap folyamán kérdezek tőled néhányat.\n\n"
         "Holnap reggelig várok! 💪",
@@ -244,7 +244,7 @@ async def cmd_force(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data["last_date"] = None  # Reset hogy küldje
     save_data(data)
     await update.message.reply_text("⏳ Napi szavak generálása...")
-    await send_daily_words(update.get_bot(), data)
+    await send_daily_words(context.bot, data)
 
 
 async def cmd_force_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -253,9 +253,9 @@ async def cmd_force_question(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not data.get("today_words"):
         await update.message.reply_text("Még nincsenek mai szavak! Előbb /force")
         return
-    data["learned_today"] = True  # Kell hogy kérdezzen
+    data["learned_today"] = True
     save_data(data)
-    await send_review_question(update.get_bot(), data)
+    await send_review_question(context.bot, data)
     if not data.get("current_question"):
         await update.message.reply_text("Próbáld újra, vagy írj előbb /force-t.")
 
