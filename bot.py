@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 # --- Gemini API (direkt requests, nem SDK) ---
 
 def gemini(prompt: str) -> str:
-    url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
     body = {"contents": [{"parts": [{"text": prompt}]}]}
     r = requests.post(url, json=body, timeout=30)
     r.raise_for_status()
