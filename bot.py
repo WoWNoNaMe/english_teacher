@@ -17,7 +17,7 @@ CHAT_ID = int(os.environ["CHAT_ID"])
 DATA_FILE = "progress.json"
 
 DAILY_SEND_HOUR = 8      # 07:40 Budapest = 05:40 UTC
-DAILY_SEND_MINUTE = 30
+DAILY_SEND_MINUTE = 37
 QUESTION_START_HOUR = 7  # 09:00 Budapest = 07:00 UTC
 QUESTION_END_HOUR = 18   # 20:00 Budapest = 18:00 UTC
 
@@ -219,15 +219,14 @@ async def cmd_forcequestion(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def scheduler(bot):
     while True:
         now = datetime.utcnow()
+        logger.info(f"Scheduler tick: {now.strftime('%H:%M:%S')} UTC")
         data = load_data()
         today = now.strftime("%Y-%m-%d")
 
-        # Napi szavak: 05:40-06:00 UTC között bármikor, ha még nem ment ma
         if now.hour == DAILY_SEND_HOUR and now.minute >= DAILY_SEND_MINUTE:
             if data.get("last_date") != today:
                 await send_daily_words(bot, data)
 
-        # Kérdések
         if data.get("learned_today") and not data.get("current_question"):
             if QUESTION_START_HOUR <= now.hour < QUESTION_END_HOUR:
                 if random.random() < 0.25:
