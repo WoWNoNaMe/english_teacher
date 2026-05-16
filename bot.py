@@ -17,7 +17,7 @@ CHAT_ID = int(os.environ["CHAT_ID"])
 DATA_FILE = "progress.json"
 
 DAILY_SEND_HOUR = 8      # 07:40 Budapest = 05:40 UTC
-DAILY_SEND_MINUTE = 42
+DAILY_SEND_MINUTE = 46
 QUESTION_START_HOUR = 7  # 09:00 Budapest = 07:00 UTC
 QUESTION_END_HOUR = 18   # 20:00 Budapest = 18:00 UTC
 
@@ -245,10 +245,13 @@ async def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     logger.info("Bot indul...")
-    async with app:
-        await app.start()
-        await app.updater.start_polling(drop_pending_updates=True)
-        await scheduler(app.bot)     
+    
+    await app.initialize()
+    await app.start()
+    await app.updater.start_polling(drop_pending_updates=True)
+    
+    logger.info("Scheduler indul...")
+    await scheduler(app.bot)    
 
 if __name__ == "__main__":
     asyncio.run(main())
