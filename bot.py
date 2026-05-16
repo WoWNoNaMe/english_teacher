@@ -16,8 +16,8 @@ GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 CHAT_ID = int(os.environ["CHAT_ID"])
 DATA_FILE = "progress.json"
 
-DAILY_SEND_HOUR = 5      # 07:40 Budapest = 05:40 UTC
-DAILY_SEND_MINUTE = 40
+DAILY_SEND_HOUR = 8      # 07:40 Budapest = 05:40 UTC
+DAILY_SEND_MINUTE = 30
 QUESTION_START_HOUR = 7  # 09:00 Budapest = 07:00 UTC
 QUESTION_END_HOUR = 18   # 20:00 Budapest = 18:00 UTC
 
