@@ -248,9 +248,8 @@ async def main():
     async with app:
         await app.start()
         await app.updater.start_polling(drop_pending_updates=True)
-        await scheduler(app.bot)
-        await app.updater.stop()
-        await app.stop()
+        asyncio.create_task(scheduler(app.bot))  
+        await asyncio.Event().wait()            
 
 if __name__ == "__main__":
     asyncio.run(main())
