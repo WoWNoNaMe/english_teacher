@@ -220,19 +220,20 @@ async def scheduler(bot):
     while True:
         now = datetime.utcnow()
         data = load_data()
+        today = now.strftime("%Y-%m-%d")
 
-        if now.hour == DAILY_SEND_HOUR and now.minute == DAILY_SEND_MINUTE:
-            await send_daily_words(bot, data)
-            await asyncio.sleep(61)
-            continue
+        # Napi szavak: 05:40-06:00 UTC között bármikor, ha még nem ment ma
+        if now.hour == DAILY_SEND_HOUR and now.minute >= DAILY_SEND_MINUTE:
+            if data.get("last_date") != today:
+                await send_daily_words(bot, data)
 
+        # Kérdések
         if data.get("learned_today") and not data.get("current_question"):
             if QUESTION_START_HOUR <= now.hour < QUESTION_END_HOUR:
                 if random.random() < 0.25:
                     await send_question(bot, data)
 
         await asyncio.sleep(600)
-
 
 # --- Main ---
 
